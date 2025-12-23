@@ -8,7 +8,7 @@ set -e
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
 echo -e "${GREEN}========================================${NC}"
 echo -e "${GREEN}  BabyMonitor Installation Script${NC}"
@@ -21,71 +21,78 @@ if [ "$EUID" -eq 0 ]; then
     exit 1
 fi
 
-# Configuration
 INSTALL_DIR="/opt/babymonitor"
-AUDIO_DEVICE="hw:2,0"  # May need adjustment based on USB port
+CONFIG_FILE="${INSTALL_DIR}/config/config.env"
 
+# Check if config exists
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo -e "${RED}ERROR: config.env not found!${NC}"
+    echo "Please copy config.env.example to config.env and fill in your values:"
+    echo "  cp ${INSTALL_DIR}/config/config.env.example ${INSTALL_DIR}/config/config.env"
+    echo "  nano ${INSTALL_DIR}/config/config.env"
+    exit 1
+fi
+
+# Load config
+source "$CONFIG_FILE"
+
+echo -e "${YELLOW}Device: ${DEVICE_NAME}${NC}"
+echo ""
+
+# Step 1: Update system
 echo -e "${YELLOW}Step 1: Updating system packages...${NC}"
 sudo apt update
 sudo apt upgrade -y
 
+# Step 2: Install dependencies
 echo -e "${YELLOW}Step 2: Installing dependencies...${NC}"
-sudo apt install -y snapserver alsa-utils netcat-openbsd python3 python3-venv python3-pip
+sudo apt install -y snapserver alsa-utils netcat-openbsd python3 python3-pip sox ffmpeg curl
 
-echo -e "${YELLOW}Step 3: Creating project directory...${NC}"
-sudo mkdir -p ${INSTALL_DIR}/{config,scripts,bot,systemd}
-sudo chown -R $USER:$USER ${INSTALL_DIR}
+# Step 3: Install Python packages
+echo -e "${YELLOW}Step 3: Installing Python packages...${NC}"
+pip3 install python-telegram-bot --break-system-packages
 
-echo -e "${YELLOW}Step 4: Detecting USB microphone...${NC}"
+# Step 4: Install Tailscale
+echo -e "${YELLOW}Step 4: Installing Tailscale...${NC}"
+if ! command -v tailscale &> /dev/null; then
+    curl -fsSL https://tailscale.com/install.sh | sh
+    echo -e "${YELLOW}Run 'sudo tailscale up' after installation to authenticate${NC}"
+else
+    echo -e "${GREEN}Tailscale already installed${NC}"
+fi
+
+# Step 5: Detect USB microphone
+echo -e "${YELLOW}Step 5: Detecting USB microphone...${NC}"
 if arecord -l 2>/dev/null | grep -q "USB"; then
     echo -e "${GREEN}USB microphone detected!${NC}"
     arecord -l | grep -A1 "USB"
-
-    # Try to find the card number
     CARD_NUM=$(arecord -l | grep "USB" | head -1 | sed 's/card \([0-9]*\):.*/\1/')
-    if [ -n "$CARD_NUM" ]; then
-        AUDIO_DEVICE="hw:${CARD_NUM},0"
-        echo -e "${GREEN}Using audio device: ${AUDIO_DEVICE}${NC}"
+    DETECTED_DEVICE="hw:${CARD_NUM},0"
+    echo -e "${GREEN}Detected audio device: ${DETECTED_DEVICE}${NC}"
+
+    # Update config if different
+    if [ "$AUDIO_DEVICE" != "$DETECTED_DEVICE" ]; then
+        echo -e "${YELLOW}Updating config with detected device...${NC}"
+        sed -i "s/AUDIO_DEVICE=.*/AUDIO_DEVICE=\"${DETECTED_DEVICE}\"/" "$CONFIG_FILE"
+        AUDIO_DEVICE="$DETECTED_DEVICE"
     fi
 else
     echo -e "${RED}WARNING: No USB microphone detected!${NC}"
-    echo "Please connect your USB microphone and run this script again."
-    echo "Or manually configure the audio device in the service file."
+    echo "Using configured device: ${AUDIO_DEVICE}"
 fi
 
-echo -e "${YELLOW}Step 5: Configuring Snapserver...${NC}"
-sudo tee /etc/snapserver.conf > /dev/null << 'EOF'
-###############################################################################
-#  BabyMonitor Snapserver Configuration
-###############################################################################
-
-[server]
-# threads = -1
-
-[http]
-doc_root = /usr/share/snapserver/snapweb
-
-[tcp]
-# port = 1705
-
-[stream]
-# Audio source from named pipe
-source = pipe:///tmp/snapfifo?name=BabyMonitor&sampleformat=48000:16:1
-
-# Default codec
-#codec = flac
-
-# Buffer [ms]
-#buffer = 1000
-
-[logging]
-#filter = *:info
-EOF
-
+# Step 6: Add _snapserver to audio group
 echo -e "${YELLOW}Step 6: Adding _snapserver to audio group...${NC}"
 sudo usermod -a -G audio _snapserver
 
-echo -e "${YELLOW}Step 7: Creating audio capture service...${NC}"
+# Step 7: Configure Snapserver
+echo -e "${YELLOW}Step 7: Configuring Snapserver...${NC}"
+sudo cp ${INSTALL_DIR}/config/snapserver.conf /etc/snapserver.conf
+
+# Step 8: Install systemd services
+echo -e "${YELLOW}Step 8: Installing systemd services...${NC}"
+
+# Audio capture service
 sudo tee /etc/systemd/system/babymonitor-audio.service > /dev/null << EOF
 [Unit]
 Description=BabyMonitor Audio Capture
@@ -95,7 +102,7 @@ Requires=snapserver.service
 [Service]
 Type=simple
 ExecStartPre=/bin/sleep 5
-ExecStart=/bin/bash -c 'while ! arecord -l 2>/dev/null | grep -q USB; do sleep 2; done; sleep 2; exec arecord -D ${AUDIO_DEVICE} -f S16_LE -r 48000 -c 1 -t raw > /tmp/snapfifo'
+ExecStart=/bin/bash -c 'while ! arecord -l 2>/dev/null | grep -q USB; do sleep 2; done; sleep 2; exec arecord -D ${AUDIO_DEVICE} -f S16_LE -r ${SAMPLE_RATE:-48000} -c ${CHANNELS:-1} -t raw > /tmp/snapfifo'
 Restart=always
 RestartSec=5
 User=_snapserver
@@ -105,99 +112,7 @@ Group=audio
 WantedBy=multi-user.target
 EOF
 
-echo -e "${YELLOW}Step 8: Installing monitor script...${NC}"
-cat > ${INSTALL_DIR}/scripts/monitor.py << 'MONITOR_EOF'
-#!/usr/bin/env python3
-"""BabyMonitor Connection Monitor - Sends Ntfy alerts when Snapcast client disconnects"""
-import json, socket, time, urllib.request, os
-from datetime import datetime
-
-SNAPSERVER_HOST, SNAPSERVER_PORT = "localhost", 1705
-CHECK_INTERVAL, DISCONNECT_TIMEOUT, ALERT_COOLDOWN = 5, 10, 30
-NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "babymonitor-alerts")
-NTFY_SERVER = os.environ.get("NTFY_SERVER", "https://ntfy.sh")
-
-class Monitor:
-    def __init__(self):
-        self.last_client_seen = self.last_alert_time = None
-        self.alert_sent = False
-
-    def get_connected_clients(self):
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(2)
-            sock.connect((SNAPSERVER_HOST, SNAPSERVER_PORT))
-            sock.send((json.dumps({"id":1,"jsonrpc":"2.0","method":"Server.GetStatus"})+"\n").encode())
-            data = json.loads(sock.recv(8192).decode())
-            sock.close()
-            return sum(1 for g in data["result"]["server"]["groups"] for c in g["clients"] if c["connected"])
-        except: return 0
-
-    def send_ntfy(self, title, message, priority="high", tags=None):
-        try:
-            headers = {"Title": title, "Priority": priority}
-            if tags: headers["Tags"] = tags
-            req = urllib.request.Request(f"{NTFY_SERVER}/{NTFY_TOPIC}", data=message.encode(), headers=headers)
-            urllib.request.urlopen(req, timeout=10)
-            print(f"[{datetime.now()}] Ntfy sent: {title}")
-        except Exception as e: print(f"[{datetime.now()}] Ntfy failed: {e}")
-
-    def run(self):
-        print(f"[{datetime.now()}] BabyMonitor watchdog started - Topic: {NTFY_TOPIC}")
-        self.send_ntfy("BabyMonitor Online", "Monitoring started.", priority="low", tags="white_check_mark,baby")
-        while True:
-            clients, now = self.get_connected_clients(), time.time()
-            if clients > 0:
-                if self.alert_sent:
-                    self.send_ntfy("Connection Restored", f"Reconnected after {int(now-self.last_client_seen)}s", priority="default", tags="green_circle,baby")
-                    self.alert_sent = False
-                self.last_client_seen = now
-            elif self.last_client_seen:
-                secs = int(now - self.last_client_seen)
-                if secs >= DISCONNECT_TIMEOUT and not self.alert_sent and (not self.last_alert_time or now - self.last_alert_time >= ALERT_COOLDOWN):
-                    self.send_ntfy("CONNECTION LOST!", f"No client for {secs}s. Check app!", priority="urgent", tags="red_circle,warning,baby")
-                    self.alert_sent, self.last_alert_time = True, now
-            time.sleep(CHECK_INTERVAL)
-
-if __name__ == "__main__": Monitor().run()
-MONITOR_EOF
-chmod +x ${INSTALL_DIR}/scripts/monitor.py
-
-echo -e "${YELLOW}Step 9: Installing control script...${NC}"
-cat > ${INSTALL_DIR}/scripts/babymonitor-ctl << 'CTL_EOF'
-#!/bin/bash
-PAUSE_FILE="/opt/babymonitor/config/paused"
-HC_URLS=$(cat /opt/babymonitor/config/healthchecks_urls 2>/dev/null)
-
-ping_healthchecks() {
-    for url in $HC_URLS; do curl -fsS -m 10 "$url$1" > /dev/null 2>&1; done
-}
-
-case "$1" in
-    pause)
-        touch "$PAUSE_FILE"
-        sudo systemctl stop babymonitor-monitor
-        ping_healthchecks "/0"
-        echo "BabyMonitor PAUSED - no alerts will be sent"
-        ;;
-    resume)
-        rm -f "$PAUSE_FILE"
-        sudo systemctl start babymonitor-monitor
-        ping_healthchecks ""
-        echo "BabyMonitor RESUMED - alerts active"
-        ;;
-    status)
-        [ -f "$PAUSE_FILE" ] && echo "Status: PAUSED" || echo "Status: ACTIVE"
-        systemctl is-active babymonitor-monitor babymonitor-audio snapserver
-        ;;
-    *) echo "Usage: babymonitor {pause|resume|status}"; exit 1 ;;
-esac
-CTL_EOF
-chmod +x ${INSTALL_DIR}/scripts/babymonitor-ctl
-sudo ln -sf ${INSTALL_DIR}/scripts/babymonitor-ctl /usr/local/bin/babymonitor
-
-echo -e "${YELLOW}Step 10: Creating monitor service...${NC}"
-read -p "Enter your Ntfy topic name (e.g., babymonitor-abc123): " NTFY_TOPIC
+# Monitor service
 sudo tee /etc/systemd/system/babymonitor-monitor.service > /dev/null << EOF
 [Unit]
 Description=BabyMonitor Connection Monitor
@@ -206,82 +121,170 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 /opt/babymonitor/scripts/monitor.py
+ExecStart=/usr/bin/python3 ${INSTALL_DIR}/scripts/monitor.py
 Restart=always
 RestartSec=10
 User=$USER
-Environment=NTFY_TOPIC=${NTFY_TOPIC}
-Environment=NTFY_SERVER=https://ntfy.sh
+EnvironmentFile=${CONFIG_FILE}
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-echo -e "${YELLOW}Step 11: Setting up Healthchecks.io heartbeat...${NC}"
-read -p "Enter Healthchecks.io ping URL(s) (space-separated, or press Enter to skip): " HC_URLS
-if [ -n "$HC_URLS" ]; then
-    echo "$HC_URLS" > ${INSTALL_DIR}/config/healthchecks_urls
-    # Add cron job
-    (crontab -l 2>/dev/null | grep -v hc-ping
-    echo "* * * * * [ ! -f /opt/babymonitor/config/paused ] && for url in $HC_URLS; do curl -fsS -m 10 --retry 3 \"\$url\" > /dev/null 2>&1; done") | crontab -
-    echo -e "${GREEN}Healthchecks configured!${NC}"
+# Mic alert service
+sudo tee /etc/systemd/system/babymonitor-mic-alert.service > /dev/null << EOF
+[Unit]
+Description=BabyMonitor Mic Alert Loop
+After=snapserver.service
+
+[Service]
+Type=simple
+ExecStart=${INSTALL_DIR}/scripts/mic-alert-loop.sh
+Restart=always
+RestartSec=5
+User=_snapserver
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Telegram bot service
+sudo tee /etc/systemd/system/babymonitor-telegram.service > /dev/null << EOF
+[Unit]
+Description=BabyMonitor Telegram Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 ${INSTALL_DIR}/scripts/telegram-bot.py
+Restart=always
+RestartSec=10
+User=$USER
+WorkingDirectory=${INSTALL_DIR}
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Step 9: Create mic-alert-loop script
+echo -e "${YELLOW}Step 9: Creating mic-alert-loop script...${NC}"
+cat > ${INSTALL_DIR}/scripts/mic-alert-loop.sh << 'EOF'
+#!/bin/bash
+# Continuous warning beep while mic is disconnected
+
+CONFIG_FILE="/opt/babymonitor/config/config.env"
+PIPE="/tmp/snapfifo"
+PAUSE_FILE="/opt/babymonitor/config/paused"
+WARNING_BEEP_FILE="/opt/babymonitor/config/warning_beep.raw"
+
+source "$CONFIG_FILE" 2>/dev/null
+
+# Generate warning beep if not exists
+if [ ! -f "$WARNING_BEEP_FILE" ]; then
+    sox -n -r 48000 -b 16 -c 1 -t raw /tmp/beep1.raw synth 0.15 sine 1200 vol 0.4 2>/dev/null
+    sox -n -r 48000 -b 16 -c 1 -t raw /tmp/silence.raw synth 0.1 sine 0 vol 0 2>/dev/null
+    cat /tmp/beep1.raw /tmp/silence.raw /tmp/beep1.raw /tmp/silence.raw /tmp/beep1.raw > "$WARNING_BEEP_FILE"
+    rm -f /tmp/beep1.raw /tmp/silence.raw
 fi
 
-echo -e "${YELLOW}Step 12: Enabling and starting services...${NC}"
+while true; do
+    if [ -f "$PAUSE_FILE" ]; then
+        sleep 5
+        continue
+    fi
+
+    if ! arecord -l 2>/dev/null | grep -q "USB"; then
+        if [ -p "$PIPE" ]; then
+            cat "$WARNING_BEEP_FILE" >> "$PIPE" 2>/dev/null
+        fi
+        sleep 3
+    else
+        sleep 5
+    fi
+done
+EOF
+chmod +x ${INSTALL_DIR}/scripts/mic-alert-loop.sh
+
+# Step 10: Set up cron jobs
+echo -e "${YELLOW}Step 10: Setting up cron jobs...${NC}"
+
+# Heartbeat beep cron (as _snapserver user)
+sudo -u _snapserver crontab -l 2>/dev/null | grep -v heartbeat-beep > /tmp/snapserver_cron || true
+echo "*/5 * * * * ${INSTALL_DIR}/scripts/heartbeat-beep.sh" >> /tmp/snapserver_cron
+sudo -u _snapserver crontab /tmp/snapserver_cron
+rm /tmp/snapserver_cron
+
+# Mic check cron
+(crontab -l 2>/dev/null | grep -v mic-check; echo "* * * * * ${INSTALL_DIR}/scripts/mic-check.sh") | crontab -
+
+# Healthchecks.io ping cron
+if [ -n "$HEALTHCHECK_URLS" ]; then
+    PING_CMD="[ ! -f ${INSTALL_DIR}/config/paused ]"
+    for url in $HEALTHCHECK_URLS; do
+        PING_CMD="$PING_CMD && curl -fsS -m 10 --retry 3 '$url' > /dev/null 2>&1"
+    done
+    (crontab -l 2>/dev/null | grep -v hc-ping; echo "* * * * * $PING_CMD") | crontab -
+    echo -e "${GREEN}Healthchecks.io configured${NC}"
+fi
+
+# Step 11: Create symlink for babymonitor command
+echo -e "${YELLOW}Step 11: Creating babymonitor command...${NC}"
+sudo ln -sf ${INSTALL_DIR}/scripts/babymonitor-ctl /usr/local/bin/babymonitor
+
+# Step 12: Initialize bot config
+echo -e "${YELLOW}Step 12: Initializing bot config...${NC}"
+cat > ${INSTALL_DIR}/config/bot_config.json << EOF
+{
+  "authorized_users": [],
+  "setup_complete": false
+}
+EOF
+
+# Step 13: Enable and start services
+echo -e "${YELLOW}Step 13: Enabling and starting services...${NC}"
 sudo systemctl daemon-reload
-sudo systemctl enable snapserver babymonitor-audio babymonitor-monitor
+sudo systemctl enable snapserver babymonitor-audio babymonitor-monitor babymonitor-mic-alert babymonitor-telegram
 sudo systemctl restart snapserver
 sleep 3
-sudo systemctl start babymonitor-audio babymonitor-monitor
+sudo systemctl start babymonitor-audio babymonitor-monitor babymonitor-mic-alert babymonitor-telegram
 
-echo -e "${YELLOW}Step 13: Waiting for services to start...${NC}"
-sleep 10
-
+# Step 14: Wait and check status
 echo -e "${YELLOW}Step 14: Checking service status...${NC}"
-echo ""
-echo "Snapserver status:"
-systemctl is-active snapserver && echo -e "${GREEN}Running${NC}" || echo -e "${RED}Not running${NC}"
-echo ""
-echo "Audio capture status:"
-systemctl is-active babymonitor-audio && echo -e "${GREEN}Running${NC}" || echo -e "${RED}Not running${NC}"
-echo ""
+sleep 5
 
-# Check stream status
-echo "Stream status:"
-STREAM_STATUS=$(echo '{"id":1,"jsonrpc":"2.0","method":"Server.GetStatus"}' | nc -w 2 localhost 1705 2>/dev/null | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d["result"]["server"]["streams"][0]["status"])' 2>/dev/null || echo "unknown")
-if [ "$STREAM_STATUS" = "playing" ]; then
-    echo -e "${GREEN}Stream is playing!${NC}"
-else
-    echo -e "${YELLOW}Stream status: ${STREAM_STATUS}${NC}"
-fi
+echo ""
+echo "Service Status:"
+for svc in snapserver babymonitor-audio babymonitor-monitor babymonitor-mic-alert babymonitor-telegram tailscaled; do
+    STATUS=$(systemctl is-active $svc 2>/dev/null || echo "not installed")
+    if [ "$STATUS" = "active" ]; then
+        echo -e "  ${GREEN}✓${NC} $svc: $STATUS"
+    else
+        echo -e "  ${RED}✗${NC} $svc: $STATUS"
+    fi
+done
+
+# Get IPs
+PI_IP=$(hostname -I | awk '{print $1}')
+TS_IP=$(tailscale ip -4 2>/dev/null || echo "not connected")
 
 echo ""
 echo -e "${GREEN}========================================${NC}"
 echo -e "${GREEN}  Installation Complete!${NC}"
 echo -e "${GREEN}========================================${NC}"
 echo ""
-PI_IP=$(hostname -I | awk '{print $1}')
+echo -e "Device Name: ${GREEN}${DEVICE_NAME}${NC}"
+echo -e "Local IP: ${PI_IP}"
+echo -e "Tailscale IP: ${TS_IP}"
+echo -e "Ntfy Topic: ${NTFY_TOPIC}"
+echo ""
 echo "Next steps:"
-echo ""
-echo "1. Install Snapcast app on your phone:"
-echo "   - Android: https://f-droid.org/packages/de.badaix.snapcast/"
-echo "   - iOS: https://apps.apple.com/us/app/snapcast-client/id1552559653"
-echo ""
-echo "2. Install Ntfy app for alerts:"
-echo "   - Android: https://f-droid.org/packages/io.heckel.ntfy/"
-echo "   - iOS: https://apps.apple.com/app/ntfy/id1625396347"
-echo "   - Subscribe to topic: ${NTFY_TOPIC}"
-echo ""
-echo "3. Add this server in Snapcast app:"
-echo "   IP Address: ${PI_IP}"
-echo "   Port: 1704 (default)"
-echo ""
-echo "4. Connect and test audio!"
+echo "1. Run 'sudo tailscale up' if Tailscale not yet authenticated"
+echo "2. Open Telegram and message your bot"
+echo "3. Follow the setup wizard"
 echo ""
 echo "Commands:"
 echo "  babymonitor status  - Check system status"
 echo "  babymonitor pause   - Pause all alerts"
 echo "  babymonitor resume  - Resume alerts"
-echo ""
-echo "Web UI: http://${PI_IP}:1780"
 echo ""
