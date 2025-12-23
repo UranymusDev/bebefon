@@ -206,6 +206,15 @@ done
 EOF
 chmod +x ${INSTALL_DIR}/scripts/mic-alert-loop.sh
 
+# Step 9b: Pre-generate warning beep file with correct permissions
+echo -e "${YELLOW}Step 9b: Generating warning beep audio file...${NC}"
+sox -n -r 48000 -b 16 -c 1 -t raw /tmp/beep1.raw synth 0.15 sine 1200 vol 0.4 2>/dev/null
+sox -n -r 48000 -b 16 -c 1 -t raw /tmp/silence.raw synth 0.1 sine 0 vol 0 2>/dev/null
+cat /tmp/beep1.raw /tmp/silence.raw /tmp/beep1.raw /tmp/silence.raw /tmp/beep1.raw > ${INSTALL_DIR}/config/warning_beep.raw
+rm -f /tmp/beep1.raw /tmp/silence.raw
+sudo chown _snapserver:audio ${INSTALL_DIR}/config/warning_beep.raw
+echo -e "${GREEN}Warning beep file created${NC}"
+
 # Step 10: Set up cron jobs
 echo -e "${YELLOW}Step 10: Setting up cron jobs...${NC}"
 
