@@ -1,0 +1,53 @@
+#!/bin/bash
+# BabyMonitor Control Script
+
+CONFIG_FILE="/opt/babymonitor/config/config.env"
+PAUSE_FILE="/opt/babymonitor/config/paused"
+
+# Load config
+source "$CONFIG_FILE" 2>/dev/null
+
+ping_healthchecks() {
+    for url in $HEALTHCHECK_URLS; do
+        curl -fsS -m 10 "$url$1" > /dev/null 2>&1
+    done
+}
+
+case "$1" in
+    pause)
+        touch "$PAUSE_FILE"
+        sudo systemctl stop babymonitor-monitor
+        ping_healthchecks "/0"
+        echo "BabyMonitor PAUSED - no alerts will be sent"
+        ;;
+    resume)
+        rm -f "$PAUSE_FILE"
+        sudo systemctl start babymonitor-monitor
+        ping_healthchecks ""
+        echo "BabyMonitor RESUMED - alerts active"
+        ;;
+    status)
+        echo "=== BabyMonitor Status ==="
+        [ -f "$PAUSE_FILE" ] && echo "Alerts: PAUSED" || echo "Alerts: ACTIVE"
+        echo ""
+        echo "Services:"
+        echo -n "  snapserver:        "; systemctl is-active snapserver
+        echo -n "  babymonitor-audio: "; systemctl is-active babymonitor-audio
+        echo -n "  babymonitor-monitor: "; systemctl is-active babymonitor-monitor
+        echo ""
+        echo "Config: $CONFIG_FILE"
+        echo "Ntfy Topic: $NTFY_TOPIC"
+        ;;
+    config)
+        ${EDITOR:-nano} "$CONFIG_FILE"
+        echo "Restart services to apply: sudo systemctl restart babymonitor-monitor"
+        ;;
+    beep)
+        sudo -u _snapserver /opt/babymonitor/scripts/heartbeat-beep.sh
+        echo "Beep sent!"
+        ;;
+    *)
+        echo "Usage: babymonitor {pause|resume|status|config|beep}"
+        exit 1
+        ;;
+esac

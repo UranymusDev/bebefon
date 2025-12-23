@@ -1,0 +1,20 @@
+[Unit]
+Description=BabyMonitor Audio Capture
+After=sound.target snapserver.service
+Requires=snapserver.service
+
+[Service]
+Type=simple
+# Wait for snapserver to create the pipe
+ExecStartPre=/bin/sleep 5
+# Wait for USB mic, then start capture
+# Note: hw:2,0 may need adjustment based on USB port
+ExecStart=/bin/bash -c 'while ! arecord -l 2>/dev/null | grep -q USB; do sleep 2; done; sleep 2; exec arecord -D hw:2,0 -f S16_LE -r 48000 -c 1 -t raw > /tmp/snapfifo'
+Restart=always
+RestartSec=5
+# Run as _snapserver user to write to the pipe
+User=_snapserver
+Group=audio
+
+[Install]
+WantedBy=multi-user.target

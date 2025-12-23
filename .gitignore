@@ -1,0 +1,25 @@
+# Secrets - NEVER commit these
+config/config.env
+config/telegram.env
+config/bot_config.json
+save.md
+.env
+
+temp/*
+tmp/*
+# Generated files
+config/*.raw
+config/beep_params
+config/mic_state
+config/paused
+
+# QR codes with sensitive info
+*_qr.png
+
+# Python
+__pycache__/
+*.pyc
+
+# OS files
+.DS_Store
+Thumbs.db

@@ -1,0 +1,16 @@
+[Unit]
+Description=BabyMonitor Connection Monitor
+After=network-online.target snapserver.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/babymonitor/scripts/monitor.py
+Restart=always
+RestartSec=10
+User=bebefon
+Environment=NTFY_TOPIC=your-ntfy-topic-here
+Environment=NTFY_SERVER=https://ntfy.sh
+
+[Install]
+WantedBy=multi-user.target
