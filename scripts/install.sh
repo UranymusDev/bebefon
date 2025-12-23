@@ -215,6 +215,13 @@ rm -f /tmp/beep1.raw /tmp/silence.raw
 sudo chown _snapserver:audio ${INSTALL_DIR}/config/warning_beep.raw
 echo -e "${GREEN}Warning beep file created${NC}"
 
+# Step 9c: Pre-generate heartbeat beep file with correct permissions
+echo -e "${YELLOW}Step 9c: Generating heartbeat beep audio file...${NC}"
+sox -n -r 48000 -b 16 -c 1 -t raw ${INSTALL_DIR}/config/beep.raw synth ${BEEP_DURATION:-0.3} sine ${BEEP_FREQUENCY:-800} vol ${BEEP_VOLUME:-0.3} 2>/dev/null
+echo "${BEEP_FREQUENCY:-800}_${BEEP_DURATION:-0.3}_${BEEP_VOLUME:-0.3}" > ${INSTALL_DIR}/config/beep_params
+sudo chown _snapserver:audio ${INSTALL_DIR}/config/beep.raw ${INSTALL_DIR}/config/beep_params
+echo -e "${GREEN}Heartbeat beep file created${NC}"
+
 # Step 10: Set up cron jobs
 echo -e "${YELLOW}Step 10: Setting up cron jobs...${NC}"
 
