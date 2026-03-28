@@ -204,6 +204,31 @@ async def join(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Falscher Einladungscode.")
 
 
+async def leave(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Remove yourself from authorized users"""
+    bot_config = load_bot_config()
+    user = update.effective_user
+    user_id = user.id
+
+    users = bot_config.get("authorized_users", [])
+    if user_id not in users:
+        await update.message.reply_text("Du bist nicht autorisiert.")
+        return
+
+    if len(users) == 1:
+        await update.message.reply_text(
+            "⚠️ Du bist der einzige autorisierte User. Entfernen nicht möglich.\n\n"
+            "Füge zuerst einen weiteren User hinzu (/join)."
+        )
+        return
+
+    users.remove(user_id)
+    bot_config["authorized_users"] = users
+    save_bot_config(bot_config)
+    logger.info(f"User {user_id} ({user.first_name}) left")
+    await update.message.reply_text("👋 Du wurdest entfernt und bekommst keine Benachrichtigungen mehr.")
+
+
 async def set_invite_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Set invite code via Telegram"""
     bot_config = load_bot_config()
@@ -266,7 +291,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/reset - Setup zuruecksetzen\n"
         "/setname <name> - Geraetename aendern\n"
         "/setcode <code> - Einladungscode setzen\n"
-        "/join <code> - Mit Einladungscode beitreten",
+        "/join <code> - Mit Einladungscode beitreten\n"
+        "/leave - Eigenen Zugang entfernen",
         parse_mode="Markdown"
     )
 
@@ -1022,6 +1048,7 @@ async def post_init(application):
         ("reset", "Setup zuruecksetzen"),
         ("setcode", "Einladungscode setzen"),
         ("join", "Mit Einladungscode beitreten"),
+        ("leave", "Eigenen Zugang entfernen"),
         ("help", "Alle Befehle"),
     ]
     await application.bot.set_my_commands(commands)
@@ -1282,6 +1309,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(wifi_conv_handler)
     app.add_handler(CommandHandler("join", join))
+    app.add_handler(CommandHandler("leave", leave))
     app.add_handler(CommandHandler("setcode", set_invite_code))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("status", status))
