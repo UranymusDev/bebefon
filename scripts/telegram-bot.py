@@ -262,9 +262,11 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "tailscaled": get_service_status("tailscaled"),
     }
 
-    # Tailscale IP
+    # Tailscale IP + account
     ok, tailscale_ip = run_command("tailscale ip -4 2>/dev/null")
     tailscale_ip = tailscale_ip.strip() if ok else "Nicht verbunden"
+    ok, ts_account = run_command("tailscale whois $(tailscale ip -4 2>/dev/null) 2>/dev/null | grep 'Name:' | tail -1")
+    tailscale_account = ts_account.strip().replace("Name:", "").strip() if ok else ""
 
     # Mic status
     ok, mic_output = run_command("arecord -l 2>/dev/null | grep -c USB")
@@ -279,7 +281,10 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_text = f"📊 {device_name} Status\n\n"
     status_text += f"🔔 Benachrichtigungen: {'⏸️ PAUSIERT' if paused else '✅ Aktiv'}\n"
     status_text += f"🎤 Mikrofon: {'✅' if mic_status == 'Verbunden' else '❌'} {mic_status}\n"
-    status_text += f"🌐 Tailscale IP: {tailscale_ip}\n\n"
+    ts_line = f"🌐 Tailscale: {tailscale_ip}"
+    if tailscale_account:
+        ts_line += f" ({tailscale_account})"
+    status_text += ts_line + "\n\n"
 
     status_text += "Dienste:\n"
     for service, state in services.items():
