@@ -423,11 +423,13 @@ async def tailscale_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     arg = context.args[0] if context.args else ""
 
-    # Disconnect
+    # Disconnect / logout
     if arg == "disconnect":
-        ok, output = run_command("sudo tailscale down")
+        ok, output = run_command("sudo tailscale logout")
         if ok:
-            await update.message.reply_text("🔌 Tailscale getrennt.")
+            await update.message.reply_text(
+                "🔌 Tailscale abgemeldet.\n\nMit /tailscale neu verbinden und anderem Account anmelden."
+            )
         else:
             await update.message.reply_text(f"❌ Fehler: {output}")
         return
