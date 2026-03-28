@@ -305,13 +305,14 @@ async def git_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text("🔄 Suche nach Updates...")
 
-    # Fetch and reset to origin/main (ignores local changes)
+    _, before = run_command(f"cd {REPO_DIR} && git rev-parse HEAD")
     ok, output = run_command(f"cd {REPO_DIR} && git fetch origin && git reset --hard origin/main", timeout=60)
+    _, after = run_command(f"cd {REPO_DIR} && git rev-parse HEAD")
 
     if ok:
-        if "HEAD is now at" in output:
+        if before.strip() != after.strip():
             await update.message.reply_text(
-                "✅ Update installiert!\n\nMit /restart Dienste neu starten."
+                "✅ Update war erfolgreich!\n\nMit /restart Dienste neu starten."
             )
         else:
             await update.message.reply_text("✅ Bereits auf dem neuesten Stand!")
