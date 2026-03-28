@@ -476,6 +476,20 @@ async def tailscale_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"🔑 Tailscale-Anmeldung\n\nOeffne diesen Link um dich anzumelden:\n{auth_url}\n\n"
                 "Nach der Anmeldung verbindet sich der Pi automatisch."
             )
+            # Wait in background for connection and notify
+            async def notify_when_connected():
+                for _ in range(60):  # max 5 min
+                    await asyncio.sleep(5)
+                    ok, ip = run_command("tailscale ip -4 2>/dev/null")
+                    if ok and ip.strip():
+                        ok2, acc = run_command("tailscale whois $(tailscale ip -4 2>/dev/null) 2>/dev/null | grep 'Name:' | tail -1")
+                        account = acc.strip().replace("Name:", "").strip() if ok2 else ""
+                        msg = f"✅ Tailscale verbunden!\n\nIP: {ip.strip()}"
+                        if account:
+                            msg += f"\nAccount: {account}"
+                        await update.message.reply_text(msg)
+                        return
+            asyncio.create_task(notify_when_connected())
         else:
             # Maybe already connected without needing auth
             ok, ts_ip = run_command("tailscale ip -4 2>/dev/null")
