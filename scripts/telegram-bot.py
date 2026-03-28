@@ -310,11 +310,8 @@ async def git_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if ok:
         if "HEAD is now at" in output:
-            commit_info = output.strip().split("\n")[-1]
             await update.message.reply_text(
-                f"✅ Aktualisiert!\n\n`{commit_info}`\n\n"
-                "Mit /restart Dienste neu starten um Aenderungen anzuwenden.",
-                parse_mode="Markdown"
+                "✅ Update installiert!\n\nMit /restart Dienste neu starten."
             )
         else:
             await update.message.reply_text("✅ Bereits auf dem neuesten Stand!")
