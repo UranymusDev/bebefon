@@ -232,7 +232,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🔧 *Verwaltung*\n"
         "/restart - Dienste neu starten\n"
         "/reboot - Raspberry Pi neu starten\n"
-        "/tailscale - Tailscale verbinden / Account wechseln\n"
+        "/tailscale - Tailscale Status / verbinden / trennen\n"
+        "/tailscale reauth - Account wechseln\n"
+        "/tailscale disconnect - Tailscale trennen\n"
         "/update - Updates von Git laden\n"
         "/logs [service] - Logs anzeigen\n\n"
         "⚙️ *Einstellungen*\n"
@@ -419,22 +421,33 @@ async def tailscale_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update, bot_config):
         return
 
+    arg = context.args[0] if context.args else ""
+
+    # Disconnect
+    if arg == "disconnect":
+        ok, output = run_command("sudo tailscale down")
+        if ok:
+            await update.message.reply_text("🔌 Tailscale getrennt.")
+        else:
+            await update.message.reply_text(f"❌ Fehler: {output}")
+        return
+
     # Check current status
     ok, ts_ip = run_command("tailscale ip -4 2>/dev/null")
     if ok and ts_ip.strip():
         ok2, ts_account = run_command("tailscale whois $(tailscale ip -4 2>/dev/null) 2>/dev/null | grep 'Name:' | tail -1")
         account = ts_account.strip().replace("Name:", "").strip() if ok2 else "unbekannt"
         await update.message.reply_text(
-            f"✅ Tailscale bereits verbunden\n\nIP: {ts_ip.strip()}\nAccount: {account}\n\n"
-            "Mit anderem Account verbinden? /tailscale reauth"
+            f"✅ Tailscale verbunden\n\nIP: {ts_ip.strip()}\nAccount: {account}\n\n"
+            "Optionen:\n/tailscale reauth - Account wechseln\n/tailscale disconnect - Trennen"
         )
-        if not context.args or context.args[0] != "reauth":
+        if arg != "reauth":
             return
 
     await update.message.reply_text("🔄 Starte Tailscale-Anmeldung...")
 
     try:
-        cmd = ["sudo", "tailscale", "up", "--force-reauth"] if (context.args and context.args[0] == "reauth") else ["sudo", "tailscale", "up"]
+        cmd = ["sudo", "tailscale", "up", "--force-reauth"] if arg == "reauth" else ["sudo", "tailscale", "up"]
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
@@ -834,7 +847,7 @@ async def post_init(application):
         ("config", "Konfiguration anzeigen"),
         ("restart", "Dienste neu starten"),
         ("reboot", "Pi neu starten"),
-        ("tailscale", "Tailscale verbinden / Account wechseln"),
+        ("tailscale", "Tailscale verbinden / Account wechseln / trennen"),
         ("update", "Updates laden"),
         ("logs", "Logs anzeigen"),
         ("setup", "Setup-Assistent"),
