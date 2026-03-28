@@ -13,6 +13,8 @@ import json
 import asyncio
 import subprocess
 import logging
+import urllib.request
+import tempfile
 from pathlib import Path
 from datetime import datetime
 
@@ -25,7 +27,6 @@ from telegram.ext import (
 # WiFi conversation states
 WIFI_MENU = 0
 WIFI_PASSWORD = 1
-import tempfile
 
 # Paths
 CONFIG_DIR = Path("/opt/babymonitor/config")
@@ -97,6 +98,29 @@ def get_service_status(service):
     """Get systemd service status"""
     ok, output = run_command(f"systemctl is-active {service}")
     return output.strip()
+
+
+def fetch_snapcast_apk_info():
+    """Fetch latest Snapcast APK info from GitHub releases API. Returns (version, url) or (None, None)."""
+    try:
+        req = urllib.request.Request(
+            "https://api.github.com/repos/badaix/snapcast/releases/latest",
+            headers={"User-Agent": "bebefon-bot"}
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+        version = data.get("tag_name", "")
+        for asset in data.get("assets", []):
+            name = asset.get("name", "")
+            if name.endswith(".apk") and "arm64" in name:
+                return version, asset["browser_download_url"]
+        # fallback: any apk
+        for asset in data.get("assets", []):
+            if asset.get("name", "").endswith(".apk"):
+                return version, asset["browser_download_url"]
+        return version, None
+    except Exception:
+        return None, None
 
 
 def is_authorized(update: Update, bot_config: dict) -> bool:
@@ -708,13 +732,14 @@ async def setup_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "   Android: https://play.google.com/store/apps/details?id=com.tailscale.ipn\n\n"
             "2️⃣ **Snapcast** (Audio-Streaming)\n"
             "   iOS: https://apps.apple.com/us/app/snapcast-client/id1552559653\n"
-            "   Android: https://f-droid.org/packages/de.badaix.snapcast/\n\n"
+            "   Android: APK direkt herunterladen (Button unten) oder F-Droid\n\n"
             "3️⃣ **Ntfy** (Push-Benachrichtigungen)\n"
             "   iOS: https://apps.apple.com/app/ntfy/id1625396347\n"
             "   Android: https://play.google.com/store/apps/details?id=io.heckel.ntfy\n\n"
             "Tippe auf 'Weiter' wenn alle Apps installiert sind.",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📦 Snapcast APK senden (Android)", callback_data="setup_send_apk")],
                 [InlineKeyboardButton("Weiter →", callback_data="setup_tailscale")]
             ])
         )
@@ -872,10 +897,40 @@ async def setup_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("🔔 Test-Piep senden", callback_data="setup_test_beep")],
+                    [InlineKeyboardButton("📦 Snapcast APK senden (Android)", callback_data="setup_send_apk")],
                     [InlineKeyboardButton("← Zurueck", callback_data="setup_tailscale_link"),
                      InlineKeyboardButton("Weiter →", callback_data="setup_ntfy")]
                 ])
             )
+
+    elif data == "setup_send_apk":
+        await query.answer("📦 APK wird gesucht...", show_alert=False)
+        chat_id = query.message.chat_id
+
+        version, apk_url = fetch_snapcast_apk_info()
+        if not apk_url:
+            await query.get_bot().send_message(chat_id, "❌ Snapcast APK nicht gefunden. Bitte manuell von F-Droid laden.")
+            return
+
+        await query.get_bot().send_message(chat_id, f"📦 Lade Snapcast {version} herunter...")
+
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".apk", delete=False) as tmp:
+                tmp_path = tmp.name
+                req = urllib.request.Request(apk_url, headers={"User-Agent": "bebefon-bot"})
+                with urllib.request.urlopen(req, timeout=60) as resp:
+                    tmp.write(resp.read())
+
+            with open(tmp_path, "rb") as f:
+                await query.get_bot().send_document(
+                    chat_id,
+                    document=f,
+                    filename=f"snapcast_{version}.apk",
+                    caption=f"📦 Snapcast {version} fuer Android\n\nAPK oeffnen und installieren. Falls 'Unbekannte Quellen' gefragt wird: einmal erlauben."
+                )
+            os.unlink(tmp_path)
+        except Exception as e:
+            await query.get_bot().send_message(chat_id, f"❌ Fehler beim Herunterladen: {str(e)[:200]}")
 
     elif data == "setup_test_beep":
         run_command("sudo -u _snapserver /opt/babymonitor/scripts/heartbeat-beep.sh")
