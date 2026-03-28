@@ -759,33 +759,123 @@ async def setup_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Need to set up Tailscale on Pi first
             await query.edit_message_text(
                 f"🌐 Schritt 2b: Tailscale auf {DEVICE_NAME} einrichten\n\n"
-                f"Das Babyphone muss noch mit Tailscale verbunden werden.\n\n"
-                f"Bitte wende dich an {GIFT_GIVER} fuer Hilfe bei diesem Schritt.",
+                f"⚠️ Das Babyphone ist noch nicht mit Tailscale verbunden.\n\n"
+                f"Tippe auf 'Anmeldelink generieren' — du bekommst dann einen Link zum Einloggen.",
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔑 Anmeldelink generieren", callback_data="setup_tailscale_auth")],
                     [InlineKeyboardButton("← Zurueck", callback_data="setup_tailscale"),
-                     InlineKeyboardButton("Erneut pruefen", callback_data="setup_tailscale_link")]
+                     InlineKeyboardButton("🔄 Erneut pruefen", callback_data="setup_tailscale_link")]
+                ])
+            )
+
+    elif data == "setup_tailscale_auth":
+        await query.edit_message_text("🔄 Verbindung wird vorbereitet...")
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "sudo", "tailscale", "up",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT
+            )
+
+            auth_url = None
+            try:
+                async with asyncio.timeout(10):
+                    async for line in proc.stdout:
+                        text_line = line.decode().strip()
+                        for word in text_line.split():
+                            if word.startswith("https://login.tailscale.com"):
+                                auth_url = word
+                                break
+                        if auth_url:
+                            break
+            except asyncio.TimeoutError:
+                pass
+
+            if auth_url:
+                await query.edit_message_text(
+                    f"🔑 Tailscale-Anmeldung\n\n"
+                    f"Oeffne diesen Link in deinem Browser und melde dich an:\n\n"
+                    f"{auth_url}\n\n"
+                    f"Nach der Anmeldung verbindet sich {DEVICE_NAME} automatisch.\n"
+                    f"Du bekommst hier eine Bestaetigung.",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔄 Verbindung pruefen", callback_data="setup_tailscale_link")]
+                    ])
+                )
+
+                # Notify in background when connected
+                chat_id = query.message.chat_id
+                async def notify_setup_connected():
+                    for _ in range(60):
+                        await asyncio.sleep(5)
+                        ok, ip = run_command("tailscale ip -4 2>/dev/null")
+                        if ok and ip.strip():
+                            await query.get_bot().send_message(
+                                chat_id,
+                                f"✅ {DEVICE_NAME} ist jetzt mit Tailscale verbunden!\n\n"
+                                f"IP: {ip.strip()}\n\n"
+                                f"Tippe auf 'Weiter' im Setup-Wizard um fortzufahren.",
+                            )
+                            return
+                asyncio.create_task(notify_setup_connected())
+
+            else:
+                # Check if already connected
+                ok, ts_ip = run_command("tailscale ip -4 2>/dev/null")
+                if ok and ts_ip.strip():
+                    await query.edit_message_text(
+                        f"✅ {DEVICE_NAME} ist bereits mit Tailscale verbunden!\n\nIP: {ts_ip.strip()}",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("Weiter →", callback_data="setup_snapcast")]
+                        ])
+                    )
+                else:
+                    await query.edit_message_text(
+                        "❌ Konnte keinen Anmeldelink generieren.\n\n"
+                        "Stelle sicher dass der Pi eine Internetverbindung hat.",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("← Zurueck", callback_data="setup_tailscale_link")]
+                        ])
+                    )
+
+        except Exception as e:
+            await query.edit_message_text(
+                f"❌ Fehler: {str(e)[:200]}",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("← Zurueck", callback_data="setup_tailscale_link")]
                 ])
             )
 
     elif data == "setup_snapcast":
         ok, ts_ip = run_command("tailscale ip -4 2>/dev/null")
-        ts_ip = ts_ip.strip() if ok else "[TAILSCALE_IP]"
+        ts_ip = ts_ip.strip() if ok and ts_ip.strip() else None
 
-        await query.edit_message_text(
-            "🎵 Schritt 3: Snapcast verbinden\n\n"
-            "1. Oeffne die Snapcast App\n"
-            f"2. Fuege Server hinzu: `{ts_ip}`\n"
-            "3. Port: 1704 (Standard)\n"
-            "4. Verbinden - du solltest jetzt Audio hoeren!\n\n"
-            "💡 Tipp: Die App funktioniert auch im Hintergrund bei gesperrtem Bildschirm.",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔔 Test-Piep senden", callback_data="setup_test_beep")],
-                [InlineKeyboardButton("← Zurueck", callback_data="setup_tailscale_link"),
-                 InlineKeyboardButton("Weiter →", callback_data="setup_ntfy")]
-            ])
-        )
+        if not ts_ip:
+            await query.edit_message_text(
+                "⚠️ Schritt 3: Snapcast verbinden\n\n"
+                "Tailscale ist noch nicht verbunden — die IP des Babyphones fehlt.\n\n"
+                "Bitte zuerst Tailscale einrichten (Schritt 2).",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("← Zurueck zu Tailscale", callback_data="setup_tailscale_link")]
+                ])
+            )
+        else:
+            await query.edit_message_text(
+                "🎵 Schritt 3: Snapcast verbinden\n\n"
+                "1. Oeffne die Snapcast App\n"
+                f"2. Fuege Server hinzu: `{ts_ip}`\n"
+                "3. Port: 1704 (Standard)\n"
+                "4. Verbinden - du solltest jetzt Audio hoeren!\n\n"
+                "💡 Tipp: Die App funktioniert auch im Hintergrund bei gesperrtem Bildschirm.",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔔 Test-Piep senden", callback_data="setup_test_beep")],
+                    [InlineKeyboardButton("← Zurueck", callback_data="setup_tailscale_link"),
+                     InlineKeyboardButton("Weiter →", callback_data="setup_ntfy")]
+                ])
+            )
 
     elif data == "setup_test_beep":
         run_command("sudo -u _snapserver /opt/babymonitor/scripts/heartbeat-beep.sh")
