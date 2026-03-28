@@ -991,7 +991,7 @@ async def wifi_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
 
     if data == "wifi_status":
-        ok, out = run_command("nmcli -t -f DEVICE,STATE,CONNECTION device status | grep wlan0")
+        ok, out = run_command("nmcli -t -f DEVICE,STATE,CONNECTION device status | grep '^wlan0:'")
         ok2, ip = run_command("ip addr show wlan0 | grep 'inet ' | awk '{print $2}' | cut -d/ -f1")
         ok3, signal = run_command("nmcli -t -f IN-USE,SSID,SIGNAL device wifi list | grep '^\\*'")
 
