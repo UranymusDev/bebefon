@@ -232,6 +232,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🔧 *Verwaltung*\n"
         "/restart - Dienste neu starten\n"
         "/reboot - Raspberry Pi neu starten\n"
+        "/tailscale - Tailscale verbinden / Account wechseln\n"
         "/update - Updates von Git laden\n"
         "/logs [service] - Logs anzeigen\n\n"
         "⚙️ *Einstellungen*\n"
@@ -410,6 +411,66 @@ async def restart_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
         results.append(f"{'✅' if ok else '❌'} {service}")
 
     await update.message.reply_text("Dienste neu gestartet:\n\n" + "\n".join(results))
+
+
+async def tailscale_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Connect Tailscale - sends auth URL via Telegram"""
+    bot_config = load_bot_config()
+    if not is_authorized(update, bot_config):
+        return
+
+    # Check current status
+    ok, ts_ip = run_command("tailscale ip -4 2>/dev/null")
+    if ok and ts_ip.strip():
+        ok2, ts_account = run_command("tailscale whois $(tailscale ip -4 2>/dev/null) 2>/dev/null | grep 'Name:' | tail -1")
+        account = ts_account.strip().replace("Name:", "").strip() if ok2 else "unbekannt"
+        await update.message.reply_text(
+            f"✅ Tailscale bereits verbunden\n\nIP: {ts_ip.strip()}\nAccount: {account}\n\n"
+            "Mit anderem Account verbinden? /tailscale reauth"
+        )
+        if not context.args or context.args[0] != "reauth":
+            return
+
+    await update.message.reply_text("🔄 Starte Tailscale-Anmeldung...")
+
+    try:
+        cmd = ["sudo", "tailscale", "up", "--force-reauth"] if (context.args and context.args[0] == "reauth") else ["sudo", "tailscale", "up"]
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT
+        )
+
+        # Read output looking for auth URL (timeout 10s)
+        auth_url = None
+        try:
+            async with asyncio.timeout(10):
+                async for line in proc.stdout:
+                    text_line = line.decode().strip()
+                    for word in text_line.split():
+                        if word.startswith("https://login.tailscale.com"):
+                            auth_url = word
+                            break
+                    if auth_url:
+                        break
+        except asyncio.TimeoutError:
+            pass
+
+        if auth_url:
+            await update.message.reply_text(
+                f"🔑 Tailscale-Anmeldung\n\nOeffne diesen Link um dich anzumelden:\n{auth_url}\n\n"
+                "Nach der Anmeldung verbindet sich der Pi automatisch."
+            )
+        else:
+            # Maybe already connected without needing auth
+            ok, ts_ip = run_command("tailscale ip -4 2>/dev/null")
+            if ok and ts_ip.strip():
+                await update.message.reply_text(f"✅ Tailscale verbunden! IP: {ts_ip.strip()}")
+            else:
+                await update.message.reply_text("❌ Kein Auth-Link erhalten. Versuche es nochmal mit /tailscale")
+
+    except Exception as e:
+        await update.message.reply_text(f"❌ Fehler: {e}")
 
 
 async def logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -773,6 +834,7 @@ async def post_init(application):
         ("config", "Konfiguration anzeigen"),
         ("restart", "Dienste neu starten"),
         ("reboot", "Pi neu starten"),
+        ("tailscale", "Tailscale verbinden / Account wechseln"),
         ("update", "Updates laden"),
         ("logs", "Logs anzeigen"),
         ("setup", "Setup-Assistent"),
@@ -894,6 +956,7 @@ def main():
     app.add_handler(CommandHandler("setup", setup_command))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("reboot", reboot_pi))
+    app.add_handler(CommandHandler("tailscale", tailscale_cmd))
     app.add_handler(CommandHandler("temp", temperature))
     app.add_handler(CommandHandler("uptime", uptime_cmd))
     app.add_handler(CallbackQueryHandler(setup_callback, pattern="^setup_"))
