@@ -124,6 +124,21 @@ def is_authorized(update: Update, bot_config: dict) -> bool:
     return user_id in bot_config.get("authorized_users", [])
 
 
+async def deny_if_unauthorized(update: Update, bot_config: dict) -> bool:
+    """Returns True if unauthorized (and sends explanation). Use as: if await deny_if_unauthorized(...): return"""
+    if is_authorized(update, bot_config):
+        return False
+    if not bot_config.get("authorized_users"):
+        await update.message.reply_text("Tippe /start um den Bot zu aktivieren.")
+    else:
+        invite_code = load_config().get("INVITE_CODE", "")
+        if invite_code:
+            await update.message.reply_text(f"Kein Zugriff. Falls du einen Einladungscode hast:\n/join <code>")
+        else:
+            await update.message.reply_text("Kein Zugriff.")
+    return True
+
+
 # ============== Command Handlers ==============
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -138,14 +153,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         save_bot_config(bot_config)
         logger.info(f"Auto-authorized first user: {user_id} ({user.first_name})")
 
-    if not is_authorized(update, bot_config):
-        invite_code = load_config().get('INVITE_CODE', '')
-        if invite_code:
-            await update.message.reply_text(
-                f"Kein Zugriff.\n\nFalls du einen Einladungscode hast, tippe:\n/join {invite_code.replace(invite_code, '<code>')}"
-            )
-        else:
-            await update.message.reply_text("Du bist leider nicht berechtigt, diesen Bot zu nutzen.")
+    if await deny_if_unauthorized(update, bot_config):
         return
 
     device_name = DEVICE_NAME
@@ -222,7 +230,7 @@ async def leave(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def set_invite_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Set invite code via Telegram"""
     bot_config = load_bot_config()
-    if not is_authorized(update, bot_config):
+    if await deny_if_unauthorized(update, bot_config):
         return
 
     if not context.args:
@@ -253,7 +261,7 @@ async def set_invite_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Help command"""
     bot_config = load_bot_config()
-    if not is_authorized(update, bot_config):
+    if await deny_if_unauthorized(update, bot_config):
         return
 
     await update.message.reply_text(
@@ -290,7 +298,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show system status"""
     bot_config = load_bot_config()
-    if not is_authorized(update, bot_config):
+    if await deny_if_unauthorized(update, bot_config):
         return
 
     device_name = DEVICE_NAME
@@ -342,7 +350,7 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def pause(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Pause alerts"""
     bot_config = load_bot_config()
-    if not is_authorized(update, bot_config):
+    if await deny_if_unauthorized(update, bot_config):
         return
 
     PAUSE_FILE.touch()
@@ -363,7 +371,7 @@ async def pause(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def resume(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Resume alerts"""
     bot_config = load_bot_config()
-    if not is_authorized(update, bot_config):
+    if await deny_if_unauthorized(update, bot_config):
         return
 
     if PAUSE_FILE.exists():
@@ -381,7 +389,7 @@ async def resume(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def beep(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send test beep"""
     bot_config = load_bot_config()
-    if not is_authorized(update, bot_config):
+    if await deny_if_unauthorized(update, bot_config):
         return
 
     ok, output = run_command("sudo -u _snapserver /opt/babymonitor/scripts/heartbeat-beep.sh")
@@ -394,7 +402,7 @@ async def beep(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def show_config(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show current config"""
     bot_config = load_bot_config()
-    if not is_authorized(update, bot_config):
+    if await deny_if_unauthorized(update, bot_config):
         return
 
     config = load_config()
@@ -417,7 +425,7 @@ async def show_config(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def git_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Update from git"""
     bot_config = load_bot_config()
-    if not is_authorized(update, bot_config):
+    if await deny_if_unauthorized(update, bot_config):
         return
 
     await update.message.reply_text("🔄 Suche nach Updates...")
@@ -440,7 +448,7 @@ async def git_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def restart_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Restart all services"""
     bot_config = load_bot_config()
-    if not is_authorized(update, bot_config):
+    if await deny_if_unauthorized(update, bot_config):
         return
 
     await update.message.reply_text("🔄 Starte Dienste neu...")
@@ -464,7 +472,7 @@ async def restart_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def tailscale_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Connect Tailscale - sends auth URL via Telegram"""
     bot_config = load_bot_config()
-    if not is_authorized(update, bot_config):
+    if await deny_if_unauthorized(update, bot_config):
         return
 
     arg = context.args[0] if context.args else ""
@@ -551,7 +559,7 @@ async def tailscale_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show logs"""
     bot_config = load_bot_config()
-    if not is_authorized(update, bot_config):
+    if await deny_if_unauthorized(update, bot_config):
         return
 
     service = context.args[0] if context.args else "babymonitor-monitor"
@@ -575,7 +583,7 @@ async def logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def set_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Set device name"""
     bot_config = load_bot_config()
-    if not is_authorized(update, bot_config):
+    if await deny_if_unauthorized(update, bot_config):
         return
 
     if not context.args:
@@ -592,7 +600,7 @@ async def set_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Reset setup wizard"""
     bot_config = load_bot_config()
-    if not is_authorized(update, bot_config):
+    if await deny_if_unauthorized(update, bot_config):
         return
 
     bot_config["setup_complete"] = False
@@ -607,7 +615,7 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def reboot_pi(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Reboot the Pi"""
     bot_config = load_bot_config()
-    if not is_authorized(update, bot_config):
+    if await deny_if_unauthorized(update, bot_config):
         return
 
     await update.message.reply_text("🔄 Neustart wird ausgefuehrt...\n\nDas Babyphone ist in ca. 1 Minute wieder online.")
@@ -617,7 +625,7 @@ async def reboot_pi(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def temperature(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show Pi temperature"""
     bot_config = load_bot_config()
-    if not is_authorized(update, bot_config):
+    if await deny_if_unauthorized(update, bot_config):
         return
 
     ok, temp = run_command("vcgencmd measure_temp 2>/dev/null || cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null")
@@ -638,7 +646,7 @@ async def temperature(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def uptime_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show system uptime"""
     bot_config = load_bot_config()
-    if not is_authorized(update, bot_config):
+    if await deny_if_unauthorized(update, bot_config):
         return
 
     ok, output = run_command("uptime -p")
@@ -648,7 +656,7 @@ async def uptime_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle voice messages - play them in baby's room"""
     bot_config = load_bot_config()
-    if not is_authorized(update, bot_config):
+    if await deny_if_unauthorized(update, bot_config):
         return
 
     await update.message.reply_text("🎤 Sprachnachricht empfangen, wird abgespielt...")
@@ -688,7 +696,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle audio files - play them in baby's room"""
     bot_config = load_bot_config()
-    if not is_authorized(update, bot_config):
+    if await deny_if_unauthorized(update, bot_config):
         return
 
     await update.message.reply_text("🎵 Audio empfangen, wird abgespielt...")
@@ -1003,7 +1011,7 @@ async def setup_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def setup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Manually trigger setup wizard"""
     bot_config = load_bot_config()
-    if not is_authorized(update, bot_config):
+    if await deny_if_unauthorized(update, bot_config):
         return
 
     await update.message.reply_text(
@@ -1129,7 +1137,7 @@ async def post_init(application):
 async def wifi_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """WiFi Hauptmenü"""
     bot_config = load_bot_config()
-    if not is_authorized(update, bot_config):
+    if await deny_if_unauthorized(update, bot_config):
         return ConversationHandler.END
     context.user_data.clear()
     keyboard = [
