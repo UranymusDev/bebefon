@@ -305,18 +305,19 @@ async def git_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text("🔄 Suche nach Updates...")
 
-    # Git pull
-    ok, output = run_command(f"cd {REPO_DIR} && git pull", timeout=60)
+    # Fetch and reset to origin/main (ignores local changes)
+    ok, output = run_command(f"cd {REPO_DIR} && git fetch origin && git reset --hard origin/main", timeout=60)
 
     if ok:
-        if "Already up to date" in output or "Bereits aktuell" in output:
-            await update.message.reply_text("✅ Bereits auf dem neuesten Stand!")
-        else:
+        if "HEAD is now at" in output:
+            commit_info = output.strip().split("\n")[-1]
             await update.message.reply_text(
-                f"✅ Aktualisiert!\n\n```\n{output[:500]}\n```\n\n"
+                f"✅ Aktualisiert!\n\n`{commit_info}`\n\n"
                 "Mit /restart Dienste neu starten um Aenderungen anzuwenden.",
                 parse_mode="Markdown"
             )
+        else:
+            await update.message.reply_text("✅ Bereits auf dem neuesten Stand!")
     else:
         await update.message.reply_text(f"❌ Update fehlgeschlagen:\n{output[:500]}")
 
