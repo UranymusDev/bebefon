@@ -101,24 +101,19 @@ def get_service_status(service):
 
 
 def fetch_snapcast_apk_info():
-    """Fetch latest Snapcast APK info from GitHub releases API. Returns (version, url) or (None, None)."""
+    """Fetch latest Snapcast APK info from F-Droid API. Returns (version, url) or (None, None)."""
     try:
         req = urllib.request.Request(
-            "https://api.github.com/repos/badaix/snapcast/releases/latest",
+            "https://f-droid.org/api/v1/packages/de.badaix.snapcast",
             headers={"User-Agent": "bebefon-bot"}
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read())
-        version = data.get("tag_name", "")
-        for asset in data.get("assets", []):
-            name = asset.get("name", "")
-            if name.endswith(".apk") and "arm64" in name:
-                return version, asset["browser_download_url"]
-        # fallback: any apk
-        for asset in data.get("assets", []):
-            if asset.get("name", "").endswith(".apk"):
-                return version, asset["browser_download_url"]
-        return version, None
+        pkg = data["packages"][0]
+        version = pkg["versionName"]
+        version_code = pkg["versionCode"]
+        url = f"https://f-droid.org/repo/de.badaix.snapcast_{version_code}.apk"
+        return version, url
     except Exception:
         return None, None
 
