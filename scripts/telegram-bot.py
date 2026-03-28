@@ -411,8 +411,14 @@ async def restart_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for service in services:
         ok, _ = run_command(f"sudo systemctl restart {service}")
         results.append(f"{'✅' if ok else '❌'} {service}")
+    results.append("🔄 babymonitor-telegram (startet neu...)")
 
     await update.message.reply_text("Dienste neu gestartet:\n\n" + "\n".join(results))
+
+    async def self_restart():
+        await asyncio.sleep(2)
+        run_command("sudo systemctl restart babymonitor-telegram")
+    asyncio.create_task(self_restart())
 
 
 async def tailscale_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
