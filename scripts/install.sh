@@ -42,7 +42,7 @@ echo ""
 # Step 1: Update system
 echo -e "${YELLOW}Step 1: Updating system packages...${NC}"
 sudo apt update
-sudo apt upgrade -y
+sudo DEBIAN_FRONTEND=noninteractive apt upgrade -y || echo -e "${YELLOW}Warning: apt upgrade had issues, continuing...${NC}"
 
 # Step 2: Install dependencies
 echo -e "${YELLOW}Step 2: Installing dependencies...${NC}"
