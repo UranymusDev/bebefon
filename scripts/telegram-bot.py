@@ -1011,6 +1011,20 @@ async def wifi_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "wifi_toggle":
         ok, radio = run_command("nmcli radio wifi")
+        enabled = ok and "enabled" in radio
+        keyboard = [
+            [InlineKeyboardButton("✅ Ja", callback_data="wifi_toggle_confirm")],
+            [InlineKeyboardButton("🔙 Zurück", callback_data="wifi_back")],
+        ]
+        action = "deaktivieren" if enabled else "aktivieren"
+        await query.edit_message_text(
+            f"WiFi {'aktiviert' if enabled else 'deaktiviert'}.\nWiFi wirklich {action}?",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return WIFI_MENU
+
+    if data == "wifi_toggle_confirm":
+        ok, radio = run_command("nmcli radio wifi")
         if ok and "enabled" in radio:
             run_command("nmcli radio wifi off")
             await query.edit_message_text("📴 WiFi deaktiviert.")
@@ -1046,7 +1060,7 @@ async def wifi_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ok, saved = run_command(f"nmcli -t -f NAME connection show | grep -Fx '{ssid}'")
         if ok and saved.strip():
             await query.edit_message_text(f"🔄 Verbinde mit {ssid}...")
-            ok2, out = run_command(f"nmcli device wifi connect '{ssid}'", timeout=20)
+            ok2, out = run_command(f"sudo nmcli device wifi connect '{ssid}'", timeout=20)
             if ok2 or "successfully" in out.lower():
                 ok3, ip = run_command("ip addr show wlan0 | grep 'inet ' | awk '{print $2}' | cut -d/ -f1")
                 await query.edit_message_text(f"✅ Verbunden mit {ssid}\nIP: {ip.strip() if ok3 else '?'}")
@@ -1078,7 +1092,7 @@ async def wifi_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Fehler: kein Netzwerk gewählt.")
         return ConversationHandler.END
     await update.message.reply_text(f"🔄 Verbinde mit {ssid}...")
-    ok, out = run_command(f"nmcli device wifi connect '{ssid}' password '{password}'", timeout=20)
+    ok, out = run_command(f"sudo nmcli device wifi connect '{ssid}' password '{password}'", timeout=20)
     if ok or "successfully" in out.lower():
         ok2, ip = run_command("ip addr show wlan0 | grep 'inet ' | awk '{print $2}' | cut -d/ -f1")
         await update.message.reply_text(f"✅ Verbunden mit {ssid}\nIP: {ip.strip() if ok2 else '?'}")
