@@ -770,6 +770,8 @@ async def post_init(application):
         ("logs", "Logs anzeigen"),
         ("setup", "Setup-Assistent"),
         ("reset", "Setup zuruecksetzen"),
+        ("setcode", "Einladungscode setzen"),
+        ("join", "Mit Einladungscode beitreten"),
         ("help", "Alle Befehle"),
     ]
     await application.bot.set_my_commands(commands)
