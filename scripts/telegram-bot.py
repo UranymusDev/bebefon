@@ -19,8 +19,12 @@ from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
-    ContextTypes, MessageHandler, filters
+    ContextTypes, MessageHandler, filters, ConversationHandler
 )
+
+# WiFi conversation states
+WIFI_MENU = 0
+WIFI_PASSWORD = 1
 import tempfile
 
 # Paths
@@ -232,6 +236,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🔧 *Verwaltung*\n"
         "/restart - Dienste neu starten\n"
         "/reboot - Raspberry Pi neu starten\n"
+        "/wifi - WiFi Status / Netzwerk wechseln / ein-aus\n"
         "/tailscale - Tailscale Status / verbinden / trennen\n"
         "/tailscale reauth - Account wechseln\n"
         "/tailscale disconnect - Tailscale trennen\n"
@@ -869,6 +874,7 @@ async def post_init(application):
         ("config", "Konfiguration anzeigen"),
         ("restart", "Dienste neu starten"),
         ("reboot", "Pi neu starten"),
+        ("wifi", "WiFi Status / Netzwerk wechseln / ein-aus"),
         ("tailscale", "Tailscale verbinden / Account wechseln / trennen"),
         ("update", "Updates laden"),
         ("logs", "Logs anzeigen"),
@@ -961,6 +967,144 @@ async def post_init(application):
             logger.error(f"Failed to send startup message to {user_id}: {e}")
 
 
+## ============== WiFi ==============
+
+async def wifi_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """WiFi Hauptmenü"""
+    bot_config = load_bot_config()
+    if not is_authorized(update, bot_config):
+        return ConversationHandler.END
+    context.user_data.clear()
+    keyboard = [
+        [InlineKeyboardButton("📊 Status", callback_data="wifi_status")],
+        [InlineKeyboardButton("🔍 Netzwerke scannen", callback_data="wifi_scan")],
+        [InlineKeyboardButton("📴 WiFi ein/aus", callback_data="wifi_toggle")],
+    ]
+    await update.message.reply_text("📡 WiFi Steuerung:", reply_markup=InlineKeyboardMarkup(keyboard))
+    return WIFI_MENU
+
+
+async def wifi_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """WiFi Callback Handler"""
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+
+    if data == "wifi_status":
+        ok, out = run_command("nmcli -t -f DEVICE,STATE,CONNECTION device status | grep wlan0")
+        ok2, ip = run_command("ip addr show wlan0 | grep 'inet ' | awk '{print $2}' | cut -d/ -f1")
+        ok3, signal = run_command("nmcli -t -f IN-USE,SSID,SIGNAL device wifi list | grep '^\\*'")
+
+        if ok and "connected" in out:
+            parts = out.strip().split(":")
+            ssid = parts[2] if len(parts) > 2 else "unbekannt"
+            sig = signal.strip().split(":")[-1] if ok3 else "?"
+            ip_addr = ip.strip() if ok2 else "?"
+            text = f"📡 WiFi verbunden\n\nNetzwerk: {ssid}\nSignal: {sig}%\nIP: {ip_addr}"
+        else:
+            ok4, radio = run_command("nmcli radio wifi")
+            text = f"📴 WiFi {'deaktiviert' if ok4 and 'disabled' in radio else 'getrennt'}"
+
+        keyboard = [[InlineKeyboardButton("🔙 Zurück", callback_data="wifi_back")]]
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        return WIFI_MENU
+
+    if data == "wifi_toggle":
+        ok, radio = run_command("nmcli radio wifi")
+        if ok and "enabled" in radio:
+            run_command("nmcli radio wifi off")
+            await query.edit_message_text("📴 WiFi deaktiviert.")
+        else:
+            run_command("nmcli radio wifi on")
+            await query.edit_message_text("📶 WiFi aktiviert.")
+        return ConversationHandler.END
+
+    if data == "wifi_scan":
+        await query.edit_message_text("🔍 Suche Netzwerke...")
+        ok, out = run_command("nmcli -t -f SSID,SECURITY device wifi list")
+        if not ok or not out.strip():
+            await query.edit_message_text("❌ Keine Netzwerke gefunden.")
+            return ConversationHandler.END
+        seen = set()
+        keyboard = []
+        for line in out.strip().splitlines():
+            parts = line.split(":")
+            ssid = parts[0].strip()
+            secured = len(parts) > 1 and parts[1].strip() not in ("", "--")
+            if ssid and ssid not in seen:
+                seen.add(ssid)
+                icon = "🔒" if secured else "🔓"
+                keyboard.append([InlineKeyboardButton(f"{icon} {ssid}", callback_data=f"wifi_connect_{ssid}")])
+        keyboard.append([InlineKeyboardButton("🔙 Zurück", callback_data="wifi_back")])
+        await query.edit_message_text("📶 Verfügbare Netzwerke:", reply_markup=InlineKeyboardMarkup(keyboard))
+        return WIFI_MENU
+
+    if data.startswith("wifi_connect_"):
+        ssid = data.replace("wifi_connect_", "")
+        context.user_data["wifi_ssid"] = ssid
+        # Check if already saved
+        ok, saved = run_command(f"nmcli -t -f NAME connection show | grep -Fx '{ssid}'")
+        if ok and saved.strip():
+            await query.edit_message_text(f"🔄 Verbinde mit {ssid}...")
+            ok2, out = run_command(f"nmcli device wifi connect '{ssid}'", timeout=20)
+            if ok2 or "successfully" in out.lower():
+                ok3, ip = run_command("ip addr show wlan0 | grep 'inet ' | awk '{print $2}' | cut -d/ -f1")
+                await query.edit_message_text(f"✅ Verbunden mit {ssid}\nIP: {ip.strip() if ok3 else '?'}")
+            else:
+                await query.edit_message_text(f"❌ Verbindung fehlgeschlagen:\n{out[:200]}")
+            return ConversationHandler.END
+        else:
+            await query.edit_message_text(
+                f"🔑 Passwort für *{ssid}*:\n\nBitte eingeben oder /cancel zum Abbrechen.",
+                parse_mode="Markdown"
+            )
+            return WIFI_PASSWORD
+
+    if data == "wifi_back":
+        keyboard = [
+            [InlineKeyboardButton("📊 Status", callback_data="wifi_status")],
+            [InlineKeyboardButton("🔍 Netzwerke scannen", callback_data="wifi_scan")],
+            [InlineKeyboardButton("📴 WiFi ein/aus", callback_data="wifi_toggle")],
+        ]
+        await query.edit_message_text("📡 WiFi Steuerung:", reply_markup=InlineKeyboardMarkup(keyboard))
+        return WIFI_MENU
+
+
+async def wifi_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Passwort entgegennehmen und verbinden"""
+    ssid = context.user_data.get("wifi_ssid")
+    password = update.message.text
+    if not ssid:
+        await update.message.reply_text("❌ Fehler: kein Netzwerk gewählt.")
+        return ConversationHandler.END
+    await update.message.reply_text(f"🔄 Verbinde mit {ssid}...")
+    ok, out = run_command(f"nmcli device wifi connect '{ssid}' password '{password}'", timeout=20)
+    if ok or "successfully" in out.lower():
+        ok2, ip = run_command("ip addr show wlan0 | grep 'inet ' | awk '{print $2}' | cut -d/ -f1")
+        await update.message.reply_text(f"✅ Verbunden mit {ssid}\nIP: {ip.strip() if ok2 else '?'}")
+    else:
+        await update.message.reply_text(f"❌ Verbindung fehlgeschlagen. Passwort falsch?\n{out[:200]}")
+    return ConversationHandler.END
+
+
+async def wifi_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("❌ WiFi abgebrochen.")
+    return ConversationHandler.END
+
+
+wifi_conv_handler = ConversationHandler(
+    entry_points=[CommandHandler("wifi", wifi_cmd)],
+    states={
+        WIFI_MENU: [CallbackQueryHandler(wifi_callback, pattern="^wifi_")],
+        WIFI_PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, wifi_password)],
+    },
+    fallbacks=[CommandHandler("cancel", wifi_cancel)],
+    conversation_timeout=300,
+    per_user=True,
+    per_chat=True,
+)
+
+
 def main():
     """Start the bot"""
     # Load bot token from config.env or environment
@@ -976,6 +1120,7 @@ def main():
 
     # Add handlers
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(wifi_conv_handler)
     app.add_handler(CommandHandler("join", join))
     app.add_handler(CommandHandler("setcode", set_invite_code))
     app.add_handler(CommandHandler("help", help_command))
