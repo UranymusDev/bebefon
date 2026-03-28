@@ -237,7 +237,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "⚙️ *Einstellungen*\n"
         "/setup - Setup-Assistent\n"
         "/reset - Setup zuruecksetzen\n"
-        "/setname <name> - Geraetename aendern",
+        "/setname <name> - Geraetename aendern\n"
+        "/setcode <code> - Einladungscode setzen\n"
+        "/join <code> - Mit Einladungscode beitreten",
         parse_mode="Markdown"
     )
 
