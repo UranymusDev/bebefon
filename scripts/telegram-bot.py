@@ -181,6 +181,37 @@ async def join(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Falscher Einladungscode.")
 
 
+async def set_invite_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Set invite code via Telegram"""
+    bot_config = load_bot_config()
+    if not is_authorized(update, bot_config):
+        return
+
+    if not context.args:
+        current = load_config().get('INVITE_CODE', '(nicht gesetzt)')
+        await update.message.reply_text(
+            f"Aktueller Code: {current}\n\nNeuen Code setzen:\n/setcode <neuer-code>"
+        )
+        return
+
+    new_code = context.args[0]
+    config_path = str(CONFIG_FILE)
+
+    with open(config_path, 'r') as f:
+        content = f.read()
+
+    if 'INVITE_CODE=' in content:
+        import re
+        content = re.sub(r'INVITE_CODE=.*', f'INVITE_CODE={new_code}', content)
+    else:
+        content += f'\nINVITE_CODE={new_code}\n'
+
+    with open(config_path, 'w') as f:
+        f.write(content)
+
+    await update.message.reply_text(f"✅ Einladungscode gesetzt: {new_code}")
+
+
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Help command"""
     bot_config = load_bot_config()
@@ -840,6 +871,7 @@ def main():
     # Add handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("join", join))
+    app.add_handler(CommandHandler("setcode", set_invite_code))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("status", status))
     app.add_handler(CommandHandler("pause", pause))
