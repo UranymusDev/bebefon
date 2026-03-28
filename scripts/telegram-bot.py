@@ -119,7 +119,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"Auto-authorized first user: {user_id} ({user.first_name})")
 
     if not is_authorized(update, bot_config):
-        await update.message.reply_text("Du bist leider nicht berechtigt, diesen Bot zu nutzen.")
+        invite_code = load_config().get('INVITE_CODE', '')
+        if invite_code:
+            await update.message.reply_text(
+                f"Kein Zugriff.\n\nFalls du einen Einladungscode hast, tippe:\n/join {invite_code.replace(invite_code, '<code>')}"
+            )
+        else:
+            await update.message.reply_text("Du bist leider nicht berechtigt, diesen Bot zu nutzen.")
         return
 
     device_name = DEVICE_NAME
@@ -146,6 +152,33 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 [InlineKeyboardButton("Setup starten", callback_data="setup_start")]
             ])
         )
+
+
+async def join(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Join with invite code"""
+    bot_config = load_bot_config()
+    user = update.effective_user
+    user_id = user.id
+
+    if user_id in bot_config.get("authorized_users", []):
+        await update.message.reply_text("Du hast bereits Zugriff!")
+        return
+
+    invite_code = load_config().get('INVITE_CODE', '')
+    if not invite_code:
+        await update.message.reply_text("Kein Einladungscode konfiguriert.")
+        return
+
+    provided = " ".join(context.args) if context.args else ""
+    if provided == invite_code:
+        bot_config.setdefault("authorized_users", []).append(user_id)
+        save_bot_config(bot_config)
+        logger.info(f"User {user_id} ({user.first_name}) joined via invite code")
+        await update.message.reply_text(
+            f"✅ Willkommen bei {DEVICE_NAME}!\n\nDu hast jetzt Zugriff. Tippe /start."
+        )
+    else:
+        await update.message.reply_text("❌ Falscher Einladungscode.")
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -293,6 +326,9 @@ async def show_config(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text += f"⏱️ Alarm-Cooldown: {config.get('ALERT_COOLDOWN', '30')}s\n"
     text += f"\n🔔 Piep aktiviert: {config.get('BEEP_ENABLED', 'true')}\n"
     text += f"🔔 Piep-Intervall: {config.get('BEEP_INTERVAL', '5')} Min\n"
+    if config.get('INVITE_CODE'):
+        text += f"\n🔑 Einladungscode: {config.get('INVITE_CODE')}\n"
+        text += f"   Teilen mit: /join {config.get('INVITE_CODE')}\n"
 
     await update.message.reply_text(text)
 
@@ -803,6 +839,7 @@ def main():
 
     # Add handlers
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("join", join))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("status", status))
     app.add_handler(CommandHandler("pause", pause))
