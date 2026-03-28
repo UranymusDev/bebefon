@@ -1026,11 +1026,17 @@ async def wifi_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "wifi_toggle_confirm":
         ok, radio = run_command("nmcli radio wifi")
         if ok and "enabled" in radio:
-            run_command("nmcli radio wifi off")
-            await query.edit_message_text("📴 WiFi deaktiviert.")
+            ok2, out = run_command("sudo nmcli radio wifi off")
+            if ok2:
+                await query.edit_message_text("📴 WiFi deaktiviert.")
+            else:
+                await query.edit_message_text(f"❌ Fehler: {out[:200]}")
         else:
-            run_command("nmcli radio wifi on")
-            await query.edit_message_text("📶 WiFi aktiviert.")
+            ok2, out = run_command("sudo nmcli radio wifi on")
+            if ok2:
+                await query.edit_message_text("📶 WiFi aktiviert.")
+            else:
+                await query.edit_message_text(f"❌ Fehler: {out[:200]}")
         return ConversationHandler.END
 
     if data == "wifi_scan":
