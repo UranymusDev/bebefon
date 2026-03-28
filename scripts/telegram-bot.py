@@ -121,10 +121,7 @@ def fetch_snapcast_apk_info():
 def is_authorized(update: Update, bot_config: dict) -> bool:
     """Check if user is authorized"""
     user_id = update.effective_user.id
-    # First user to interact becomes authorized if no users exist
-    if not bot_config.get("authorized_users"):
-        return True
-    return user_id in bot_config["authorized_users"]
+    return user_id in bot_config.get("authorized_users", [])
 
 
 # ============== Command Handlers ==============
