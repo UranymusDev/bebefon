@@ -215,13 +215,6 @@ async def leave(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Du bist nicht autorisiert.")
         return
 
-    if len(users) == 1:
-        await update.message.reply_text(
-            "⚠️ Du bist der einzige autorisierte User. Entfernen nicht möglich.\n\n"
-            "Füge zuerst einen weiteren User hinzu (/join)."
-        )
-        return
-
     users.remove(user_id)
     bot_config["authorized_users"] = users
     save_bot_config(bot_config)
